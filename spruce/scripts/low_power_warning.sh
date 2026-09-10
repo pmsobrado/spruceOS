@@ -2,6 +2,13 @@
 
 . /mnt/SDCARD/spruce/scripts/helperFunctions.sh
 
+# Use the red charging LED for low-battery warnings on Miyoo Flip.
+WARNING_LED_PATH="$LED_PATH"
+
+if [ -d "/sys/class/leds/charger" ]; then
+    WARNING_LED_PATH="/sys/class/leds/charger"
+fi
+
 SLEEP=30
 
 dot_duration=0.2
@@ -21,21 +28,27 @@ morse_code_sos() {
     for symbol in "$@"; do
         case $symbol in
         ".")
-            echo 1 >${LED_PATH}/brightness
+            echo 1 >${WARNING_LED_PATH}/brightness
             [ "$do_vibrate" = "true" ] && vibrate 100 &
             sleep $dot_duration
             ;;
         "-")
-            echo 1 >${LED_PATH}/brightness
+            echo 1 >${WARNING_LED_PATH}/brightness
             [ "$do_vibrate" = "true" ] && vibrate 100 &
             sleep $dash_duration
             ;;
         esac
-        echo 0 >${LED_PATH}/brightness
+        echo 0 >${WARNING_LED_PATH}/brightness
         # No need to set vibrate to off as we passed duration to vibrate function
         sleep $intra_char_gap
     done
     sleep $inter_word_gap
+
+    # Preserve the normal charging indication after each SOS.
+    if [ "$WARNING_LED_PATH" = "/sys/class/leds/charger" ] &&
+       [ "$(device_get_charging_status)" = "Charging" ]; then
+        echo 1 >"${WARNING_LED_PATH}/brightness"
+    fi
 }
 
 log_battery() {
@@ -84,6 +97,17 @@ hard_shutdown() {
 # init_battery_log
 LAST_LOG=$(date +%s)
 
+is_charging() {
+    case "$(device_get_charging_status)" in
+        Charging|Full)
+            return 0
+            ;;
+        *)
+            return 1
+            ;;
+    esac
+}
+
 while true; do
     CAPACITY=$(device_get_battery_percent)
     PERCENT="$(get_config_value '.menuOptions."Battery Settings".lowPowerWarningPercent.selected' "4")"
@@ -107,10 +131,10 @@ while true; do
     # disable script if turned off in spruce.cfg
     [ "$PERCENT" = "Off" ] && sleep $SLEEP && continue
 
-    if [ "$CAPACITY" -le "$PERCENT" ]; then
+    if [ "$CAPACITY" -le "$PERCENT" ] && ! is_charging; then
         vibrate_count=0
         flag_added=false
-        while [ "$CAPACITY" -le "$PERCENT" ]; do
+        while [ "$CAPACITY" -le "$PERCENT" ] && ! is_charging; do
 
             if [ "$vibrate_count" -lt 2 ]; then
                 morse_code_sos "true" "." "." "." "-" "-" "-" "." "." "."
